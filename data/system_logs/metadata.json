@@ -1,0 +1,70 @@
+{
+  "sequence_length": 64,
+  "allowed_gaps": [
+    4,
+    8,
+    16,
+    32,
+    48
+  ],
+  "malicious_patterns": [
+    [
+      "SCAN",
+      "ADMIN_ACCESS"
+    ],
+    [
+      "FAILED_LOGIN",
+      "SUDO"
+    ],
+    [
+      "DOWNLOAD",
+      "EXECUTE"
+    ],
+    [
+      "CONFIG_CHANGE",
+      "SERVICE_RESTART"
+    ]
+  ],
+  "split_sizes": {
+    "train": 14000,
+    "val": 3000,
+    "test": 3000
+  },
+  "random_seed": 42,
+  "vocabulary": {
+    "SCAN": 0,
+    "ADMIN_ACCESS": 1,
+    "FAILED_LOGIN": 2,
+    "SUDO": 3,
+    "DOWNLOAD": 4,
+    "EXECUTE": 5,
+    "CONFIG_CHANGE": 6,
+    "SERVICE_RESTART": 7,
+    "LOGIN_OK": 8,
+    "READ": 9,
+    "WRITE": 10,
+    "HEARTBEAT": 11,
+    "DNS_QUERY": 12,
+    "FILE_OPEN": 13,
+    "PROCESS_LIST": 14,
+    "LOGOUT": 15
+  },
+  "gap_definition": "G = position(B) - position(A); positions are zero-based",
+  "negative_generation_rules": {
+    "background": "Only the eight benign tokens (IDs 8-15)",
+    "categories": [
+      "reversed",
+      "mismatched",
+      "A_only",
+      "B_only",
+      "benign"
+    ],
+    "reversed": "B at i, matching A at i+G",
+    "mismatched": "A at i, B from a different pattern at i+G",
+    "A_only": "A at i; benign at i+G",
+    "B_only": "benign at i; B at i+G",
+    "benign": "All tokens benign",
+    "pattern_id": "Positive: matched pattern; negative: A pattern, or B pattern for B_only; -1 for benign",
+    "negative_type": "-1 for positives; 0-4 index into categories for negatives"
+  }
+}

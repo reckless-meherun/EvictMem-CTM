@@ -1,0 +1,38 @@
+{
+  "token_to_id": {
+    "SCAN": 0,
+    "ADMIN_ACCESS": 1,
+    "FAILED_LOGIN": 2,
+    "SUDO": 3,
+    "DOWNLOAD": 4,
+    "EXECUTE": 5,
+    "CONFIG_CHANGE": 6,
+    "SERVICE_RESTART": 7,
+    "LOGIN_OK": 8,
+    "READ": 9,
+    "WRITE": 10,
+    "HEARTBEAT": 11,
+    "DNS_QUERY": 12,
+    "FILE_OPEN": 13,
+    "PROCESS_LIST": 14,
+    "LOGOUT": 15
+  },
+  "id_to_token": {
+    "0": "SCAN",
+    "1": "ADMIN_ACCESS",
+    "2": "FAILED_LOGIN",
+    "3": "SUDO",
+    "4": "DOWNLOAD",
+    "5": "EXECUTE",
+    "6": "CONFIG_CHANGE",
+    "7": "SERVICE_RESTART",
+    "8": "LOGIN_OK",
+    "9": "READ",
+    "10": "WRITE",
+    "11": "HEARTBEAT",
+    "12": "DNS_QUERY",
+    "13": "FILE_OPEN",
+    "14": "PROCESS_LIST",
+    "15": "LOGOUT"
+  }
+}
