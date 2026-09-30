@@ -68,19 +68,19 @@ def evaluate(model: nn.Module, loader: DataLoader, device: torch.device,
     """Compute overall metrics and per-gap metrics; gaps never enter the model."""
     model.eval()
     criterion = nn.CrossEntropyLoss(reduction="sum")
-    predictions, targets, gaps = [], [], []
+    predictions, targets, gap_batches = [], [], []
     total_loss = 0.0
     for sequences, labels, batch_gaps in loader:
         logits = model(sequences.to(device))
         total_loss += criterion(logits, labels.to(device)).item()
         predictions.append(logits.argmax(dim=1).cpu())
         targets.append(labels.cpu())
-        gaps.append(batch_gaps.cpu())
+        gap_batches.append(batch_gaps.cpu())
     if not targets:
         raise ValueError("Evaluation loader is empty")
     predicted = torch.cat(predictions)
     actual = torch.cat(targets)
-    gap_values = torch.cat(gaps)
+    gap_values = torch.cat(gap_batches)
     result = {"loss": total_loss / len(actual), **binary_metrics(predicted, actual)}
     result["per_gap"] = {}
     for gap in gaps:
