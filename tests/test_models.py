@@ -93,6 +93,19 @@ class ModelTests(unittest.TestCase):
             self.assertIn(key, first.state_dict())
             torch.testing.assert_close(first.state_dict()[key], second.state_dict()[key])
 
+    def test_decay_projection_preserves_gradient(self) -> None:
+        synchronisation = RandomPairSynchronisation(1, 1)
+        with torch.no_grad():
+            synchronisation.decay_params.fill_(-1)
+        output, _, _ = synchronisation(
+            torch.ones(1, 1), torch.full((1, 1), 2.0), torch.ones(1, 1))
+        self.assertEqual(synchronisation.decay_params.item(), 0.0)
+        output.sum().backward()
+        gradient = synchronisation.decay_params.grad
+        self.assertIsNotNone(gradient)
+        self.assertTrue(bool(torch.isfinite(gradient).all()))
+        self.assertNotEqual(gradient.item(), 0.0)
+
     def test_binary_metrics_and_per_gap_aggregation(self) -> None:
         actual = torch.tensor([0, 1, 0, 1])
         predicted = torch.tensor([0, 1, 1, 0])

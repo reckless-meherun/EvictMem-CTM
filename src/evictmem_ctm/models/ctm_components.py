@@ -121,8 +121,10 @@ class RandomPairSynchronisation(nn.Module):
             alpha = pair_product
             beta = torch.ones_like(pair_product)
         else:
-            # Match upstream's effective [0, 15] decay range without mutating parameters.
-            retention = torch.exp(-self.decay_params.clamp(0, 15)).unsqueeze(0)
+            # Project decay parameters to the upstream range before using them.
+            with torch.no_grad():
+                self.decay_params.clamp_(0, 15)
+            retention = torch.exp(-self.decay_params).unsqueeze(0)
             alpha = retention * alpha + pair_product
             beta = retention * beta + 1
         return alpha / torch.sqrt(beta), alpha, beta
