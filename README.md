@@ -2,16 +2,19 @@
 
 ## Synthetic system logs
 
-Generate the 20,000-example long-range classification dataset with NumPy:
+Create and activate the Conda environment, then generate, inspect, and test the
+20,000-example dataset:
 
 ```bash
+conda env create -f environment.yml
+conda activate evictmem-ctm
+
 python scripts/generate_system_logs.py --seed 42
 python scripts/inspect_system_logs.py
 python -m unittest discover -s tests -v
 ```
 
-If NumPy is unavailable, create a virtual environment and run these commands with
-`.venv/bin/python`. Use `--output-dir` and `--data-dir` to choose another location.
+Use `--output-dir` and `--data-dir` to choose another location.
 The input `sequences` contain only token IDs; labels, gaps, pattern IDs, and
 negative types are separate arrays. Positions are zero-based and the gap is
 `position(B) - position(A)`. Positive examples have `negative_types=-1`;

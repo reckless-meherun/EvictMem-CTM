@@ -1,4 +1,24 @@
+# Local Python and Conda environments
 .venv/
+venv/
+env/
+.conda/
+
+# Python caches and build artifacts
 __pycache__/
 *.py[cod]
 .pytest_cache/
+.coverage
+htmlcov/
+build/
+dist/
+*.egg-info/
+
+# Editor and operating-system files
+.vscode/
+.idea/
+.DS_Store
+
+# Local experiment outputs
+runs/
+checkpoints/
