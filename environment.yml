@@ -5,3 +5,4 @@ dependencies:
   - python=3.11
   - numpy
   - pytorch
+  - matplotlib

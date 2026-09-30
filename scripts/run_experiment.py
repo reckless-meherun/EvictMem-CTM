@@ -18,7 +18,7 @@ from evictmem_ctm.models.gru import GRUClassifier
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--model", choices=("gru", "ctm"), required=True)
+    parser.add_argument("--model", choices=("gru", "ctm", "evictmem"), required=True)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--epochs", type=int, default=20)
@@ -29,6 +29,8 @@ def main() -> None:
     parser.add_argument("--memory-length", type=int, default=5, help="CTM NLM FIFO length")
     parser.add_argument("--memory-hidden-dim", type=int, default=16)
     parser.add_argument("--n-synch-out", type=int, default=64)
+    parser.add_argument("--alpha", type=float, default=0.95,
+                        help="EvictMem retention coefficient")
     parser.add_argument("--pairing-seed", type=int, default=None,
                         help="CTM pair seed; defaults to --seed")
     parser.add_argument("--device", default="auto", choices=("auto", "cpu", "cuda"))
@@ -38,6 +40,8 @@ def main() -> None:
     args = parser.parse_args()
     if args.seed < 0 or args.lr <= 0 or args.patience < 1:
         parser.error("--seed must be nonnegative, --lr positive, and --patience positive")
+    if args.model == "evictmem" and not 0 <= args.alpha <= 1:
+        parser.error("--alpha must be between 0 and 1")
     if args.device == "cuda" and not torch.cuda.is_available():
         parser.error("CUDA was requested but is unavailable")
 
@@ -57,6 +61,8 @@ def main() -> None:
                         "n_synch_out": args.n_synch_out, "num_classes": 2,
                         "dropout": 0.0, "deep_nlm": True,
                         "pairing_seed": args.seed if args.pairing_seed is None else args.pairing_seed}
+        if args.model == "evictmem":
+            model_config.update(evicted_memory=True, alpha=args.alpha)
         model = SequenceCTM(**model_config)
     model = model.to(device)
     checkpoint_path = args.checkpoint_dir / f"{args.model}_seed{args.seed}.pt"

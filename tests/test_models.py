@@ -25,6 +25,18 @@ class EchoFirstToken(nn.Module):
         return torch.stack((1 - prediction, prediction), dim=1)
 
 
+class NumberedPreActivations(nn.Module):
+    """Return a known pre-activation at each recurrent tick."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.tick = 0
+
+    def forward(self, synapse_input: torch.Tensor) -> torch.Tensor:
+        self.tick += 1
+        return synapse_input.new_full((synapse_input.shape[0], 2), self.tick)
+
+
 class ModelTests(unittest.TestCase):
     def test_model_output_shapes_and_finite_ctm_logits(self) -> None:
         sequence = torch.randint(0, 16, (2, 64), dtype=torch.long)
@@ -34,6 +46,35 @@ class ModelTests(unittest.TestCase):
             self.assertEqual(logits.shape, (2, 2))
             self.assertTrue(bool(torch.isfinite(logits).all()))
             self.assertEqual(SequenceCTM(memory_length=3)(sequence).shape, (2, 2))
+
+    def test_evicted_memory_uses_only_real_evictions(self) -> None:
+        sequence = torch.zeros(2, 3, dtype=torch.long)
+        for enabled in (False, True):
+            model = SequenceCTM(d_model=2, memory_length=2, n_synch_out=2,
+                                evicted_memory=enabled)
+            self.assertEqual(model.alpha, 0.95)
+            model.synapse = NumberedPreActivations()
+            with torch.no_grad():
+                model.initial_state.pre_activation_trace.fill_(7)
+            nlm_inputs = []
+            hook = model.nlm.register_forward_pre_hook(
+                lambda _module, inputs: nlm_inputs.append(inputs[0].detach().clone()))
+            try:
+                self.assertEqual(model(sequence).shape, (2, 2))
+            finally:
+                hook.remove()
+            self.assertEqual(len(nlm_inputs), sequence.shape[1])
+            self.assertEqual([value.shape[-1] for value in nlm_inputs],
+                             [3 if enabled else 2] * 3)
+            for tick, expected_trace in enumerate(((7, 1), (1, 2), (2, 3))):
+                torch.testing.assert_close(
+                    nlm_inputs[tick][:, :, :2],
+                    torch.tensor(expected_trace, dtype=torch.float).expand(2, 2, 2))
+            if enabled:
+                torch.testing.assert_close(nlm_inputs[0][:, :, 2], torch.zeros(2, 2))
+                torch.testing.assert_close(nlm_inputs[1][:, :, 2], torch.zeros(2, 2))
+                torch.testing.assert_close(nlm_inputs[2][:, :, 2],
+                                           torch.full((2, 2), 0.05))
 
     def test_fifo_keeps_only_latest_pre_activations(self) -> None:
         trace = torch.tensor([[[10., 11., 12.], [20., 21., 22.]]])

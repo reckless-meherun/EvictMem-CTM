@@ -20,20 +20,27 @@ class SequenceCTM(nn.Module):
                  d_model: int = 64, memory_length: int = 5,
                  memory_hidden_dim: int = 16, n_synch_out: int = 64,
                  num_classes: int = 2, dropout: float = 0.0,
-                 deep_nlm: bool = True, pairing_seed: int = 42) -> None:
+                 deep_nlm: bool = True, pairing_seed: int = 42,
+                 evicted_memory: bool = False, alpha: float = 0.95) -> None:
         super().__init__()
         if min(vocab_size, embedding_dim, d_model, memory_length,
                memory_hidden_dim, n_synch_out, num_classes) < 1:
             raise ValueError("All model dimensions must be positive")
+        if not 0 <= alpha <= 1:
+            raise ValueError("alpha must be between 0 and 1")
+        self.memory_length = memory_length
+        self.evicted_memory = evicted_memory
+        self.alpha = alpha
+        nlm_input_length = memory_length + int(evicted_memory)
         self.embedding = nn.Embedding(vocab_size, embedding_dim)
         self.initial_state = InitialCTMState(d_model, memory_length)
         self.synapse = DepthOneSynapse(embedding_dim + d_model, d_model, dropout)
         if deep_nlm:
-            self.nlm = DeepNeuronLevelModel(d_model, memory_length,
+            self.nlm = DeepNeuronLevelModel(d_model, nlm_input_length,
                                             memory_hidden_dim, dropout=dropout)
         else:
             self.nlm = nn.Sequential(
-                SuperLinear(memory_length, 2, d_model, dropout=dropout),
+                SuperLinear(nlm_input_length, 2, d_model, dropout=dropout),
                 nn.GLU(dim=-1),
                 nn.Flatten(start_dim=1),
             )
@@ -46,14 +53,21 @@ class SequenceCTM(nn.Module):
             raise ValueError("Expected token IDs with shape [batch, sequence_length >= 1]")
         embeddings = self.embedding(sequence)
         activated, trace = self.initial_state(sequence.shape[0])
+        if self.evicted_memory:
+            compressed_memory = torch.zeros_like(activated)
 
         # As upstream does for output synchronization, include the learned start state.
         _, alpha, beta = self.synchronisation(activated)
         for tick in range(sequence.shape[1]):
             synapse_input = torch.cat((embeddings[:, tick, :], activated), dim=-1)
             pre_activation = self.synapse(synapse_input)
+            if self.evicted_memory and tick >= self.memory_length:
+                compressed_memory = (self.alpha * compressed_memory
+                                     + (1 - self.alpha) * trace[:, :, 0])
             trace = advance_pre_activation_trace(trace, pre_activation)
-            activated = self.nlm(trace)
+            nlm_input = (torch.cat((trace, compressed_memory.unsqueeze(-1)), dim=-1)
+                         if self.evicted_memory else trace)
+            activated = self.nlm(nlm_input)
             synchronised, alpha, beta = self.synchronisation(activated, alpha, beta)
 
         return self.classifier(synchronised)
