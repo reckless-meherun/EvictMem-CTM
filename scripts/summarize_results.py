@@ -50,6 +50,11 @@ def main() -> None:
             summary_rows.append({"model": label, "accuracy": test["accuracy"],
                                  "f1": test["f1"],
                                  "parameter_count": result["parameter_count"],
+                                 "best_epoch": result.get("best_epoch", ""),
+                                 "epochs_completed": result.get("epochs_completed", ""),
+                                 "stopped_early": result.get("stopped_early", ""),
+                                 "selection_metric": result.get("selection_metric", ""),
+                                 "best_selection_value": result.get("best_selection_value", ""),
                                  "training_time_seconds": result["training_time_seconds"]})
             gap_rows.append({"model": label, **{
                 f"G={gap}": test["per_gap"][str(gap)]["f1"] for gap in gaps}})
@@ -58,7 +63,9 @@ def main() -> None:
 
     results_dir.mkdir(parents=True, exist_ok=True)
     write_table(results_dir / "summary.csv",
-                ["model", "accuracy", "f1", "parameter_count", "training_time_seconds"],
+                ["model", "accuracy", "f1", "parameter_count", "best_epoch",
+                 "epochs_completed", "stopped_early", "selection_metric",
+                 "best_selection_value", "training_time_seconds"],
                 summary_rows)
     write_table(results_dir / "gap_f1.csv",
                 ["model", *(f"G={gap}" for gap in gaps)], gap_rows)

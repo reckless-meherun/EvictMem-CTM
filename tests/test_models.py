@@ -4,6 +4,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import torch
 from torch import nn
@@ -12,13 +13,13 @@ from torch.utils.data import DataLoader, TensorDataset
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
-from evictmem_ctm.experiment import (binary_metrics, evaluate, load_checkpoint,
+from evictmem_ctm.experiment import (binary_metrics, evaluate, fit, load_checkpoint,
                                      save_checkpoint)
 from evictmem_ctm.models.ctm import SequenceCTM
 from evictmem_ctm.models.ctm_components import (RandomPairSynchronisation,
                                                 advance_pre_activation_trace)
 from evictmem_ctm.models.gru import GRUClassifier
-from run_experiment import closest_capacity_hidden_dim
+from run_experiment import closest_capacity_hidden_dim, resolve_training_policy
 
 
 class EchoFirstToken(nn.Module):
@@ -142,6 +143,71 @@ class ModelTests(unittest.TestCase):
         self.assertEqual(metrics["per_gap"][4]["f1"], 1.0)
         self.assertEqual(metrics["per_gap"][8]["f1"], 0.0)
         self.assertEqual(metrics["per_gap"][8]["accuracy"], 0.0)
+
+    def test_dataset_training_defaults_and_overrides(self) -> None:
+        self.assertEqual(resolve_training_policy("system_logs"),
+                         {"max_epochs": 20, "min_epochs": 1,
+                          "patience": 3, "selection_metric": "f1"})
+        self.assertEqual(resolve_training_policy("assoc_recall"),
+                         {"max_epochs": 50, "min_epochs": 20,
+                          "patience": 10, "selection_metric": "accuracy"})
+        self.assertEqual(resolve_training_policy("assoc_recall", epochs=7,
+                         min_epochs=3, patience=2, selection_metric="f1"),
+                         {"max_epochs": 7, "min_epochs": 3,
+                          "patience": 2, "selection_metric": "f1"})
+        for overrides in ({"epochs": 0}, {"min_epochs": 0}, {"patience": -1},
+                          {"epochs": 5, "min_epochs": 6},
+                          {"selection_metric": "loss"}):
+            with self.subTest(overrides=overrides), self.assertRaises(ValueError):
+                resolve_training_policy("assoc_recall", **overrides)
+
+    def test_minimum_epochs_and_training_history(self) -> None:
+        validations = [{"loss": 0.7, "accuracy": 0.6, "f1": 0.7}] + [
+            {"loss": 0.8, "accuracy": 0.5, "f1": 0.6}] * 4
+        model = nn.Linear(1, 2)
+        with tempfile.TemporaryDirectory() as directory, \
+                patch("evictmem_ctm.experiment.train_one_epoch", return_value=0.4), \
+                patch("evictmem_ctm.experiment.evaluate", side_effect=validations):
+            summary = fit(model, None, None, torch.device("cpu"),
+                          Path(directory) / "best.pt", max_epochs=5, min_epochs=4,
+                          patience=1, model_name="tiny", model_config={"size": 1},
+                          selection_metric="accuracy")
+        self.assertEqual(summary["epochs_completed"], 4)
+        self.assertEqual(summary["best_epoch"], 1)
+        self.assertTrue(summary["stopped_early"])
+        self.assertEqual(summary["stop_reason"], "patience")
+        self.assertEqual(len(summary["history"]), 4)
+        self.assertEqual(set(summary["history"][0]),
+                         {"epoch", "train_loss", "val_loss", "val_accuracy",
+                          "val_f1", "selection_value"})
+        self.assertEqual(summary["history"][0]["selection_value"], 0.6)
+
+    def test_checkpoint_selection_uses_requested_metric(self) -> None:
+        validations = [{"loss": 0.7, "accuracy": 0.5, "f1": 0.8},
+                       {"loss": 0.6, "accuracy": 0.7, "f1": 0.6}]
+        for metric, expected_epoch in (("accuracy", 2), ("f1", 1)):
+            model = nn.Linear(1, 2)
+            with tempfile.TemporaryDirectory() as directory, \
+                    patch("evictmem_ctm.experiment.train_one_epoch", return_value=0.4), \
+                    patch("evictmem_ctm.experiment.evaluate", side_effect=validations):
+                path = Path(directory) / "best.pt"
+                summary = fit(model, None, None, torch.device("cpu"), path,
+                              max_epochs=2, min_epochs=2, patience=2,
+                              model_name="tiny", model_config={"size": 1},
+                              selection_metric=metric)
+                checkpoint = load_checkpoint(path, nn.Linear(1, 2), torch.device("cpu"),
+                                             expected_model_name="tiny",
+                                             expected_model_config={"size": 1})
+            self.assertEqual(summary["best_epoch"], expected_epoch)
+            self.assertEqual(summary["epochs_completed"], 2)
+            self.assertFalse(summary["stopped_early"])
+            self.assertEqual(summary["stop_reason"], "max_epochs")
+            self.assertEqual(checkpoint["epoch"], expected_epoch)
+            self.assertEqual(checkpoint["selection_metric"], metric)
+            self.assertEqual(checkpoint["selection_value"], summary["best_selection_value"])
+            self.assertEqual(checkpoint["validation_accuracy"],
+                             summary["best_validation_accuracy"])
+            self.assertEqual(checkpoint["validation_f1"], summary["best_validation_f1"])
 
     def test_checkpoint_has_model_identity_and_reconstructs(self) -> None:
         config = {"vocab_size": 16, "embedding_dim": 32, "hidden_size": 64,

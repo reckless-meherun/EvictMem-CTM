@@ -16,6 +16,31 @@ from evictmem_ctm.models.ctm import SequenceCTM
 from evictmem_ctm.models.gru import GRUClassifier
 
 
+TRAINING_DEFAULTS = {
+    "system_logs": {"max_epochs": 20, "min_epochs": 1,
+                    "patience": 3, "selection_metric": "f1"},
+    "assoc_recall": {"max_epochs": 50, "min_epochs": 20,
+                     "patience": 10, "selection_metric": "accuracy"},
+}
+
+
+def resolve_training_policy(dataset: str, *, epochs: int | None = None,
+                            min_epochs: int | None = None,
+                            patience: int | None = None,
+                            selection_metric: str | None = None) -> dict:
+    defaults = TRAINING_DEFAULTS[dataset]
+    policy = {"max_epochs": defaults["max_epochs"] if epochs is None else epochs,
+              "min_epochs": defaults["min_epochs"] if min_epochs is None else min_epochs,
+              "patience": defaults["patience"] if patience is None else patience,
+              "selection_metric": (defaults["selection_metric"] if selection_metric is None
+                                   else selection_metric)}
+    if (policy["max_epochs"] < 1 or policy["min_epochs"] < 1
+            or policy["min_epochs"] > policy["max_epochs"] or policy["patience"] < 1
+            or policy["selection_metric"] not in ("accuracy", "f1")):
+        raise ValueError("Require epochs >= min_epochs >= 1, patience >= 1, and accuracy or f1")
+    return policy
+
+
 def closest_capacity_hidden_dim(config: dict) -> tuple[int, int]:
     """Find the nearby vanilla NLM width closest to EvictMem's parameter count."""
     target = count_parameters(SequenceCTM(**config, evicted_memory=True))
@@ -33,8 +58,10 @@ def main() -> None:
     parser.add_argument("--dataset", choices=tuple(DATASETS), default="system_logs")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--batch-size", type=int, default=128)
-    parser.add_argument("--epochs", type=int, default=20)
-    parser.add_argument("--patience", type=int, default=3)
+    parser.add_argument("--epochs", type=int, default=None)
+    parser.add_argument("--min-epochs", type=int, default=None)
+    parser.add_argument("--patience", type=int, default=None)
+    parser.add_argument("--selection-metric", choices=("accuracy", "f1"), default=None)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--embedding-dim", type=int, default=32)
     parser.add_argument("--d-model", type=int, default=64, help="CTM neuron count")
@@ -50,8 +77,15 @@ def main() -> None:
     parser.add_argument("--checkpoint-dir", type=Path, default=Path("checkpoints"))
     parser.add_argument("--results-dir", type=Path, default=Path("runs"))
     args = parser.parse_args()
-    if args.seed < 0 or args.lr <= 0 or args.patience < 1:
-        parser.error("--seed must be nonnegative, --lr positive, and --patience positive")
+    if args.seed < 0 or args.lr <= 0:
+        parser.error("--seed must be nonnegative and --lr positive")
+    try:
+        policy = resolve_training_policy(args.dataset, epochs=args.epochs,
+                                         min_epochs=args.min_epochs,
+                                         patience=args.patience,
+                                         selection_metric=args.selection_metric)
+    except ValueError as error:
+        parser.error(str(error))
     if args.model == "evictmem" and not 0 <= args.alpha <= 1:
         parser.error("--alpha must be between 0 and 1")
     if args.model == "ctm_capacity" and args.dataset != "assoc_recall":
@@ -60,6 +94,10 @@ def main() -> None:
         parser.error("ctm_capacity requires memory_length=5")
     if args.device == "cuda" and not torch.cuda.is_available():
         parser.error("CUDA was requested but is unavailable")
+
+    print(f"dataset={args.dataset} model={args.model} max_epochs={policy['max_epochs']} "
+          f"min_epochs={policy['min_epochs']} patience={policy['patience']} "
+          f"selection_metric={policy['selection_metric']}")
 
     device_name = ("cuda" if torch.cuda.is_available() else "cpu") if args.device == "auto" else args.device
     device = torch.device(device_name)
@@ -94,9 +132,11 @@ def main() -> None:
     model = model.to(device)
     checkpoint_path = checkpoint_dir / f"{args.model}_seed{args.seed}.pt"
     summary = fit(model, loaders["train"], loaders["val"], device, checkpoint_path,
-                  max_epochs=args.epochs, learning_rate=args.lr, weight_decay=0.0,
-                  patience=args.patience, model_name=args.model,
-                  model_config=model_config, seed=args.seed, gaps=config["gaps"])
+                  max_epochs=policy["max_epochs"], min_epochs=policy["min_epochs"],
+                  learning_rate=args.lr, weight_decay=0.0,
+                  patience=policy["patience"], selection_metric=policy["selection_metric"],
+                  model_name=args.model, model_config=model_config,
+                  seed=args.seed, gaps=config["gaps"])
     load_checkpoint(checkpoint_path, model, device,
                     expected_model_name=args.model, expected_model_config=model_config)
     metrics = {split: evaluate(model, loaders[split], device, config["gaps"])
@@ -114,7 +154,9 @@ def main() -> None:
         "hyperparameters": {
             "model_config": model_config, "optimizer": "AdamW", "learning_rate": args.lr,
             "weight_decay": 0.0, "loss": "CrossEntropyLoss",
-            "max_epochs": args.epochs, "early_stopping_patience": args.patience,
+            "max_epochs": policy["max_epochs"], "min_epochs": policy["min_epochs"],
+            "early_stopping_patience": policy["patience"],
+            "selection_metric": policy["selection_metric"],
             "batch_size": args.batch_size, "num_workers": 0, "seed": args.seed,
             "device": device_name, "data_dir": str(data_dir),
         },

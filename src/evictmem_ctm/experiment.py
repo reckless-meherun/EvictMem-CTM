@@ -94,10 +94,15 @@ def evaluate(model: nn.Module, loader: DataLoader, device: torch.device,
 
 def save_checkpoint(path: Path, model: nn.Module, optimizer: torch.optim.Optimizer,
                     epoch: int, validation_f1: float, model_name: str,
-                    model_config: dict, seed: int) -> None:
+                    model_config: dict, seed: int, *,
+                    validation_accuracy: float | None = None,
+                    selection_metric: str = "f1",
+                    selection_value: float | None = None) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     torch.save({"model_state": model.state_dict(), "optimizer_state": optimizer.state_dict(),
-                "epoch": epoch, "validation_f1": validation_f1,
+                "epoch": epoch, "validation_accuracy": validation_accuracy,
+                "validation_f1": validation_f1, "selection_metric": selection_metric,
+                "selection_value": validation_f1 if selection_value is None else selection_value,
                 "model_name": model_name, "model_config": model_config,
                 "seed": seed}, path)
 
@@ -121,29 +126,54 @@ def fit(model: nn.Module, train_loader: DataLoader, val_loader: DataLoader,
         device: torch.device, checkpoint_path: Path, max_epochs: int = 20,
         learning_rate: float = 1e-3, weight_decay: float = 0.0,
         patience: int = 3, *, model_name: str, model_config: dict,
-        seed: int = 42, gaps: tuple[int, ...] = GAPS) -> dict:
-    """Train with validation-F1 early stopping and save the best epoch."""
-    if max_epochs < 1 or patience < 1 or not model_name:
-        raise ValueError("Positive epoch/patience and explicit model identity/config are required")
+        seed: int = 42, gaps: tuple[int, ...] = GAPS,
+        min_epochs: int = 1, selection_metric: str = "f1") -> dict:
+    """Train with metric-based checkpoint selection and a minimum epoch count."""
+    if (max_epochs < 1 or min_epochs < 1 or min_epochs > max_epochs or patience < 1
+            or selection_metric not in ("accuracy", "f1") or not model_name):
+        raise ValueError("Invalid training policy or missing model identity")
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate,
                                   weight_decay=weight_decay)
-    best_f1 = -1.0
+    best_value = -1.0
     best_epoch = 0
+    best_validation_accuracy = 0.0
+    best_validation_f1 = 0.0
     epochs_without_improvement = 0
+    history = []
+    stop_reason = "max_epochs"
     started = time.perf_counter()
     for epoch in range(1, max_epochs + 1):
         train_loss = train_one_epoch(model, train_loader, optimizer, device)
         validation = evaluate(model, val_loader, device, gaps)
-        print(f"Epoch {epoch}: train_loss={train_loss:.4f} val_f1={validation['f1']:.4f}")
-        if validation["f1"] > best_f1:
-            best_f1 = validation["f1"]
+        value = validation[selection_metric]
+        history.append({"epoch": epoch, "train_loss": train_loss,
+                        "val_loss": validation["loss"],
+                        "val_accuracy": validation["accuracy"],
+                        "val_f1": validation["f1"], "selection_value": value})
+        print(f"Epoch {epoch}: train_loss={train_loss:.4f} "
+              f"val_accuracy={validation['accuracy']:.4f} val_f1={validation['f1']:.4f}")
+        if value > best_value:
+            best_value = value
             best_epoch = epoch
+            best_validation_accuracy = validation["accuracy"]
+            best_validation_f1 = validation["f1"]
             epochs_without_improvement = 0
-            save_checkpoint(checkpoint_path, model, optimizer, epoch, best_f1,
-                            model_name, model_config, seed)
+            save_checkpoint(checkpoint_path, model, optimizer, epoch,
+                            best_validation_f1, model_name, model_config, seed,
+                            validation_accuracy=best_validation_accuracy,
+                            selection_metric=selection_metric, selection_value=best_value)
         else:
             epochs_without_improvement += 1
-            if epochs_without_improvement >= patience:
+            if epoch >= min_epochs and epochs_without_improvement >= patience:
+                stop_reason = "patience"
                 break
-    return {"best_epoch": best_epoch, "best_validation_f1": best_f1,
+    return {"best_epoch": best_epoch,
+            "best_validation_accuracy": best_validation_accuracy,
+            "best_validation_f1": best_validation_f1,
+            "selection_metric": selection_metric,
+            "best_selection_value": best_value,
+            "epochs_completed": len(history),
+            "stopped_early": stop_reason == "patience" and len(history) < max_epochs,
+            "stop_reason": stop_reason,
+            "history": history,
             "training_time_seconds": time.perf_counter() - started}

@@ -10,15 +10,22 @@ Run from the repository root:
 conda env create -f environment.yml
 conda activate evictmem-ctm
 
+python src/evictmem_ctm/data/assoc_recall.py
 python -m unittest discover -s tests -v
 
-python scripts/run_experiment.py --model gru
-python scripts/run_experiment.py --model ctm
-python scripts/run_experiment.py --model evictmem
+python scripts/run_experiment.py --dataset assoc_recall --model gru
+python scripts/run_experiment.py --dataset assoc_recall --model ctm
+python scripts/run_experiment.py --dataset assoc_recall --model ctm_capacity
+python scripts/run_experiment.py --dataset assoc_recall --model evictmem
 
-python scripts/summarize_results.py
+python scripts/summarize_results.py --dataset assoc_recall
 ```
 
-Raw run JSONs are saved in `runs/` and best checkpoints in `checkpoints/`.
-The summarizer writes `summary.csv`, `gap_f1.csv`, and `f1_vs_gap.png` in
-`results/`.
+Associative recall defaults to 50 maximum epochs, 20 minimum epochs, patience
+10, and validation accuracy for checkpoint selection. Its run JSONs, best
+checkpoints, and summaries are saved in `runs/assoc_recall/`,
+`checkpoints/assoc_recall/`, and `results/assoc_recall/`, respectively. The
+summary files are `summary.csv`, `gap_f1.csv`, and `f1_vs_gap.png`.
+
+The original `system_logs` benchmark remains available with its 20-epoch,
+patience-3, validation-F1 policy.
