@@ -10,6 +10,7 @@ from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 from evictmem_ctm.experiment import (binary_metrics, evaluate, load_checkpoint,
                                      save_checkpoint)
@@ -17,6 +18,7 @@ from evictmem_ctm.models.ctm import SequenceCTM
 from evictmem_ctm.models.ctm_components import (RandomPairSynchronisation,
                                                 advance_pre_activation_trace)
 from evictmem_ctm.models.gru import GRUClassifier
+from run_experiment import closest_capacity_hidden_dim
 
 
 class EchoFirstToken(nn.Module):
@@ -105,6 +107,23 @@ class ModelTests(unittest.TestCase):
         self.assertIsNotNone(gradient)
         self.assertTrue(bool(torch.isfinite(gradient).all()))
         self.assertNotEqual(gradient.item(), 0.0)
+
+    def test_capacity_control_matches_nearest_vanilla_width(self) -> None:
+        config = {"vocab_size": 74, "embedding_dim": 32, "d_model": 64,
+                  "memory_length": 5, "memory_hidden_dim": 16,
+                  "n_synch_out": 64, "num_classes": 2, "dropout": 0.0,
+                  "deep_nlm": True, "pairing_seed": 42}
+        hidden, target = closest_capacity_hidden_dim(config)
+        self.assertGreater(hidden, config["memory_hidden_dim"])
+        control = SequenceCTM(**{**config, "memory_hidden_dim": hidden})
+        self.assertFalse(control.evicted_memory)
+        self.assertEqual(target, sum(p.numel() for p in SequenceCTM(
+            **config, evicted_memory=True).parameters()))
+        distances = [abs(sum(p.numel() for p in SequenceCTM(
+            **{**config, "memory_hidden_dim": size}).parameters()) - target)
+            for size in range(12, 21)]
+        self.assertEqual(abs(sum(p.numel() for p in control.parameters()) - target),
+                         min(distances))
 
     def test_binary_metrics_and_per_gap_aggregation(self) -> None:
         actual = torch.tensor([0, 1, 0, 1])

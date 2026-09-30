@@ -63,7 +63,8 @@ def train_one_epoch(model: nn.Module, loader: DataLoader, optimizer: torch.optim
 
 
 @torch.no_grad()
-def evaluate(model: nn.Module, loader: DataLoader, device: torch.device) -> dict:
+def evaluate(model: nn.Module, loader: DataLoader, device: torch.device,
+             gaps: tuple[int, ...] = GAPS) -> dict:
     """Compute overall metrics and per-gap metrics; gaps never enter the model."""
     model.eval()
     criterion = nn.CrossEntropyLoss(reduction="sum")
@@ -82,7 +83,7 @@ def evaluate(model: nn.Module, loader: DataLoader, device: torch.device) -> dict
     gap_values = torch.cat(gaps)
     result = {"loss": total_loss / len(actual), **binary_metrics(predicted, actual)}
     result["per_gap"] = {}
-    for gap in GAPS:
+    for gap in gaps:
         selected = gap_values == gap
         if not bool(selected.any()):
             raise ValueError(f"Evaluation data has no examples for gap {gap}")
@@ -120,7 +121,7 @@ def fit(model: nn.Module, train_loader: DataLoader, val_loader: DataLoader,
         device: torch.device, checkpoint_path: Path, max_epochs: int = 20,
         learning_rate: float = 1e-3, weight_decay: float = 0.0,
         patience: int = 3, *, model_name: str, model_config: dict,
-        seed: int = 42) -> dict:
+        seed: int = 42, gaps: tuple[int, ...] = GAPS) -> dict:
     """Train with validation-F1 early stopping and save the best epoch."""
     if max_epochs < 1 or patience < 1 or not model_name:
         raise ValueError("Positive epoch/patience and explicit model identity/config are required")
@@ -132,7 +133,7 @@ def fit(model: nn.Module, train_loader: DataLoader, val_loader: DataLoader,
     started = time.perf_counter()
     for epoch in range(1, max_epochs + 1):
         train_loss = train_one_epoch(model, train_loader, optimizer, device)
-        validation = evaluate(model, val_loader, device)
+        validation = evaluate(model, val_loader, device, gaps)
         print(f"Epoch {epoch}: train_loss={train_loss:.4f} val_f1={validation['f1']:.4f}")
         if validation["f1"] > best_f1:
             best_f1 = validation["f1"]
