@@ -22,3 +22,6 @@ dist/
 # Local experiment outputs
 runs/
 checkpoints/
+results/
+logs/
+*.log
