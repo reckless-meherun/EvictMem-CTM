@@ -95,13 +95,15 @@ class DepthOneSynapse(nn.Module):
 class RandomPairSynchronisation(nn.Module):
     """Fixed sampled neuron pairs with learned recurrent synchronization decay."""
 
-    def __init__(self, n_neurons: int, n_pairs: int, n_self_pairs: int = 0) -> None:
+    def __init__(self, n_neurons: int, n_pairs: int, n_self_pairs: int = 0,
+                 pairing_seed: int = 42) -> None:
         super().__init__()
-        if n_neurons < 1 or n_pairs < 1 or not 0 <= n_self_pairs < n_pairs:
-            raise ValueError("Require positive dimensions and 0 <= n_self_pairs < n_pairs")
-        left = torch.randint(n_neurons, (n_pairs,))
+        if n_neurons < 1 or n_pairs < 1 or not 0 <= n_self_pairs < n_pairs or pairing_seed < 0:
+            raise ValueError("Require positive dimensions, valid self-pair count, and nonnegative seed")
+        generator = torch.Generator().manual_seed(pairing_seed)
+        left = torch.randint(n_neurons, (n_pairs,), generator=generator)
         right = torch.cat((left[:n_self_pairs],
-                           torch.randint(n_neurons, (n_pairs - n_self_pairs,))))
+                           torch.randint(n_neurons, (n_pairs - n_self_pairs,), generator=generator)))
         self.register_buffer("left_indices", left)
         self.register_buffer("right_indices", right)
         self.decay_params = nn.Parameter(torch.zeros(n_pairs))
@@ -119,10 +121,8 @@ class RandomPairSynchronisation(nn.Module):
             alpha = pair_product
             beta = torch.ones_like(pair_product)
         else:
-            # Match upstream's [0, 15] decay-parameter constraint without .data.
-            with torch.no_grad():
-                self.decay_params.clamp_(0, 15)
-            retention = torch.exp(-self.decay_params).unsqueeze(0)
+            # Match upstream's effective [0, 15] decay range without mutating parameters.
+            retention = torch.exp(-self.decay_params.clamp(0, 15)).unsqueeze(0)
             alpha = retention * alpha + pair_product
             beta = retention * beta + 1
         return alpha / torch.sqrt(beta), alpha, beta
