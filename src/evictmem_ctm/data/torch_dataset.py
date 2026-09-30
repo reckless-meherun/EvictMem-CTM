@@ -1,0 +1,43 @@
+"""PyTorch access to the existing system-log NPZ splits."""
+
+from pathlib import Path
+
+import numpy as np
+import torch
+from torch.utils.data import DataLoader, Dataset
+
+
+class SystemLogDataset(Dataset):
+    """Return token IDs, label, and evaluation-only gap metadata."""
+
+    def __init__(self, path: Path) -> None:
+        with np.load(path, allow_pickle=False) as archive:
+            self.sequences = torch.from_numpy(archive["sequences"].astype(np.int64))
+            self.labels = torch.from_numpy(archive["labels"].astype(np.int64))
+            self.gaps = torch.from_numpy(archive["gaps"].astype(np.int64))
+        if self.sequences.ndim != 2 or self.sequences.shape[1] != 64:
+            raise ValueError(f"{path}: expected sequences with shape [N, 64]")
+        if self.labels.shape != (len(self.sequences),) or self.gaps.shape != (len(self.sequences),):
+            raise ValueError(f"{path}: labels and gaps must have shape [N]")
+        if not bool(torch.all((self.sequences >= 0) & (self.sequences < 16))):
+            raise ValueError(f"{path}: token IDs must be in 0..15")
+
+    def __len__(self) -> int:
+        return len(self.labels)
+
+    def __getitem__(self, index: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        return self.sequences[index], self.labels[index], self.gaps[index]
+
+
+def make_dataloaders(data_dir: Path, batch_size: int = 128, num_workers: int = 0,
+                     seed: int = 42) -> dict[str, DataLoader]:
+    """Shuffle training examples reproducibly; preserve evaluation order."""
+    if batch_size < 1 or num_workers < 0:
+        raise ValueError("batch_size must be positive and num_workers nonnegative")
+    generator = torch.Generator().manual_seed(seed)
+    return {
+        split: DataLoader(SystemLogDataset(data_dir / f"{split}.npz"),
+                          batch_size=batch_size, shuffle=(split == "train"),
+                          num_workers=num_workers, generator=generator if split == "train" else None)
+        for split in ("train", "val", "test")
+    }

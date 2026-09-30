@@ -23,3 +23,16 @@ the A endpoint's pattern, except B-only examples, where they identify B's patter
 Negative types 0–4 mean reversed, mismatched, A-only, B-only, and benign.
 For one-endpoint and benign negatives, the assigned gap is a generation stratum;
 it cannot be reconstructed from the visible event tokens alone.
+
+## GRU baseline
+
+Run the single-layer GRU experiment after activating the Conda environment:
+
+```bash
+python scripts/run_experiment.py --model gru
+```
+
+Defaults: 16-token vocabulary, 32-dimensional embeddings, 64 hidden units,
+one GRU layer, no dropout, AdamW at `1e-3`, batch size 128, up to 20 epochs,
+and early stopping after 3 epochs without validation-F1 improvement. The
+best checkpoint goes to `checkpoints/` and metrics go to `runs/`.
