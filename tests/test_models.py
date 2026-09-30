@@ -1,0 +1,93 @@
+"""Small checks for model interfaces and shared experiment behavior."""
+
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+import torch
+from torch import nn
+from torch.utils.data import DataLoader, TensorDataset
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+
+from evictmem_ctm.experiment import (binary_metrics, evaluate, load_checkpoint,
+                                     save_checkpoint)
+from evictmem_ctm.models.ctm import SequenceCTM
+from evictmem_ctm.models.ctm_components import (RandomPairSynchronisation,
+                                                advance_pre_activation_trace)
+from evictmem_ctm.models.gru import GRUClassifier
+
+
+class EchoFirstToken(nn.Module):
+    def forward(self, sequence: torch.Tensor) -> torch.Tensor:
+        prediction = sequence[:, 0].float()
+        return torch.stack((1 - prediction, prediction), dim=1)
+
+
+class ModelTests(unittest.TestCase):
+    def test_model_output_shapes_and_finite_ctm_logits(self) -> None:
+        sequence = torch.randint(0, 16, (2, 64), dtype=torch.long)
+        with torch.inference_mode():
+            self.assertEqual(GRUClassifier()(sequence).shape, (2, 2))
+            logits = SequenceCTM()(sequence)
+            self.assertEqual(logits.shape, (2, 2))
+            self.assertTrue(bool(torch.isfinite(logits).all()))
+            self.assertEqual(SequenceCTM(memory_length=3)(sequence).shape, (2, 2))
+
+    def test_fifo_keeps_only_latest_pre_activations(self) -> None:
+        trace = torch.tensor([[[10., 11., 12.], [20., 21., 22.]]])
+        updated = advance_pre_activation_trace(trace, torch.tensor([[13., 23.]]))
+        torch.testing.assert_close(updated, torch.tensor([[[11., 12., 13.], [21., 22., 23.]]]))
+
+    def test_pair_buffers_are_seeded_and_checkpointed(self) -> None:
+        rng_before = torch.get_rng_state()
+        RandomPairSynchronisation(64, 64, pairing_seed=7)
+        torch.testing.assert_close(torch.get_rng_state(), rng_before)
+        first = SequenceCTM(pairing_seed=7).synchronisation
+        second = SequenceCTM(pairing_seed=7).synchronisation
+        self.assertIn("left_indices", dict(first.named_buffers()))
+        self.assertIn("right_indices", dict(first.named_buffers()))
+        for key in ("left_indices", "right_indices"):
+            self.assertIn(key, first.state_dict())
+            torch.testing.assert_close(first.state_dict()[key], second.state_dict()[key])
+
+    def test_binary_metrics_and_per_gap_aggregation(self) -> None:
+        actual = torch.tensor([0, 1, 0, 1])
+        predicted = torch.tensor([0, 1, 1, 0])
+        self.assertEqual(binary_metrics(predicted, actual), {"accuracy": 0.5, "f1": 0.5})
+
+        labels = torch.tensor([0, 1] * 5)
+        gaps = torch.tensor([gap for gap in (4, 8, 16, 32, 48) for _ in range(2)])
+        predictions = torch.tensor([0, 1, 1, 0, 0, 1, 0, 1, 0, 1])
+        sequences = torch.zeros(10, 64, dtype=torch.long)
+        sequences[:, 0] = predictions
+        loader = DataLoader(TensorDataset(sequences, labels, gaps), batch_size=3)
+        metrics = evaluate(EchoFirstToken(), loader, torch.device("cpu"))
+        self.assertEqual((metrics["accuracy"], metrics["f1"]), (0.8, 0.8))
+        self.assertEqual(set(metrics["per_gap"]), {4, 8, 16, 32, 48})
+        self.assertEqual(metrics["per_gap"][4]["f1"], 1.0)
+        self.assertEqual(metrics["per_gap"][8]["f1"], 0.0)
+        self.assertEqual(metrics["per_gap"][8]["accuracy"], 0.0)
+
+    def test_checkpoint_has_model_identity_and_reconstructs(self) -> None:
+        config = {"vocab_size": 16, "embedding_dim": 32, "hidden_size": 64,
+                  "num_classes": 2, "num_layers": 1, "dropout": 0.0}
+        model = GRUClassifier(**config)
+        optimizer = torch.optim.AdamW(model.parameters())
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "model.pt"
+            save_checkpoint(path, model, optimizer, 2, 0.75, "gru", config, 42)
+            reconstructed = GRUClassifier(**config)
+            checkpoint = load_checkpoint(path, reconstructed, torch.device("cpu"),
+                                         expected_model_name="gru", expected_model_config=config)
+            self.assertEqual((checkpoint["model_name"], checkpoint["seed"],
+                              checkpoint["epoch"], checkpoint["validation_f1"]),
+                             ("gru", 42, 2, 0.75))
+            self.assertIn("optimizer_state", checkpoint)
+            for key, value in model.state_dict().items():
+                torch.testing.assert_close(value, reconstructed.state_dict()[key])
+
+
+if __name__ == "__main__":
+    unittest.main()

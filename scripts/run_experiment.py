@@ -62,8 +62,10 @@ def main() -> None:
     checkpoint_path = args.checkpoint_dir / f"{args.model}_seed{args.seed}.pt"
     summary = fit(model, loaders["train"], loaders["val"], device, checkpoint_path,
                   max_epochs=args.epochs, learning_rate=args.lr, weight_decay=0.0,
-                  patience=args.patience)
-    load_checkpoint(checkpoint_path, model, device)
+                  patience=args.patience, model_name=args.model,
+                  model_config=model_config, seed=args.seed)
+    load_checkpoint(checkpoint_path, model, device,
+                    expected_model_name=args.model, expected_model_config=model_config)
     metrics = {split: evaluate(model, loaders[split], device)
                for split in ("train", "val", "test")}
     result = {

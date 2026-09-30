@@ -1,5 +1,6 @@
 """Shared training and evaluation utilities for sequence classifiers."""
 
+import os
 import random
 import time
 from pathlib import Path
@@ -13,6 +14,8 @@ from evictmem_ctm.data.system_logs import GAPS
 
 
 def seed_everything(seed: int) -> None:
+    # Required by CUDA matrix operations when deterministic algorithms are enabled.
+    os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -20,6 +23,7 @@ def seed_everything(seed: int) -> None:
         torch.cuda.manual_seed_all(seed)
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
+    torch.use_deterministic_algorithms(True)
 
 
 def count_parameters(model: nn.Module) -> int:
@@ -88,15 +92,24 @@ def evaluate(model: nn.Module, loader: DataLoader, device: torch.device) -> dict
 
 
 def save_checkpoint(path: Path, model: nn.Module, optimizer: torch.optim.Optimizer,
-                    epoch: int, validation_f1: float) -> None:
+                    epoch: int, validation_f1: float, model_name: str,
+                    model_config: dict, seed: int) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     torch.save({"model_state": model.state_dict(), "optimizer_state": optimizer.state_dict(),
-                "epoch": epoch, "validation_f1": validation_f1}, path)
+                "epoch": epoch, "validation_f1": validation_f1,
+                "model_name": model_name, "model_config": model_config,
+                "seed": seed}, path)
 
 
 def load_checkpoint(path: Path, model: nn.Module, device: torch.device,
-                    optimizer: torch.optim.Optimizer | None = None) -> dict:
+                    optimizer: torch.optim.Optimizer | None = None,
+                    expected_model_name: str | None = None,
+                    expected_model_config: dict | None = None) -> dict:
     checkpoint = torch.load(path, map_location=device, weights_only=True)
+    if expected_model_name is not None and checkpoint["model_name"] != expected_model_name:
+        raise ValueError("Checkpoint model name does not match requested model")
+    if expected_model_config is not None and checkpoint["model_config"] != expected_model_config:
+        raise ValueError("Checkpoint model configuration does not match requested model")
     model.load_state_dict(checkpoint["model_state"])
     if optimizer is not None:
         optimizer.load_state_dict(checkpoint["optimizer_state"])
@@ -106,10 +119,11 @@ def load_checkpoint(path: Path, model: nn.Module, device: torch.device,
 def fit(model: nn.Module, train_loader: DataLoader, val_loader: DataLoader,
         device: torch.device, checkpoint_path: Path, max_epochs: int = 20,
         learning_rate: float = 1e-3, weight_decay: float = 0.0,
-        patience: int = 3) -> dict:
+        patience: int = 3, *, model_name: str, model_config: dict,
+        seed: int = 42) -> dict:
     """Train with validation-F1 early stopping and save the best epoch."""
-    if max_epochs < 1 or patience < 1:
-        raise ValueError("max_epochs and patience must be positive")
+    if max_epochs < 1 or patience < 1 or not model_name:
+        raise ValueError("Positive epoch/patience and explicit model identity/config are required")
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate,
                                   weight_decay=weight_decay)
     best_f1 = -1.0
@@ -124,7 +138,8 @@ def fit(model: nn.Module, train_loader: DataLoader, val_loader: DataLoader,
             best_f1 = validation["f1"]
             best_epoch = epoch
             epochs_without_improvement = 0
-            save_checkpoint(checkpoint_path, model, optimizer, epoch, best_f1)
+            save_checkpoint(checkpoint_path, model, optimizer, epoch, best_f1,
+                            model_name, model_config, seed)
         else:
             epochs_without_improvement += 1
             if epochs_without_improvement >= patience:
